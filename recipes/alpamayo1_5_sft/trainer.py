@@ -52,7 +52,48 @@ class TrainingArguments(HFTrainingArguments):
     )
 
 
-class ReasoningVLA_Trainer(Trainer):
+class _NvcGopTrainerMixin(Trainer):
+    def get_train_dataloader(self):
+        dataset = self.train_dataset
+        if not hasattr(dataset, "configure_nvc_gop_store"):
+            return super().get_train_dataloader()
+        from alpamayo.data.nvc_gop_prefetcher import NvcGopBatchPrefetcher
+        from alpamayo.data.nvc_pai_processor import NvcPAIBatchProcessor, nvc_pai_collate
+        from alpamayo.processor.qwen_processor import QwenProcessor
+
+        original_collator = self.data_collator
+        self.data_collator = nvc_pai_collate
+        try:
+            loader = super().get_train_dataloader()
+        finally:
+            self.data_collator = original_collator
+        # The ordinary collator runs in DataLoader workers, but the NVC
+        # pipeline materializes decoded samples in the training process.
+        # Build its tokenizer/processor once instead of reloading it for
+        # every microbatch.
+        collate_processor = QwenProcessor(
+            vlm_name_or_path=self.model.config.vlm_name_or_path,
+            traj_vocab_size=self.model.config.traj_vocab_size,
+            min_pixels=self.model.config.min_pixels,
+            max_pixels=self.model.config.max_pixels,
+            chat_template_version="r1_5",
+        )
+        processor = NvcPAIBatchProcessor(dataset, collate_processor.collate_fn)
+        loader = NvcGopBatchPrefetcher(
+            loader,
+            dataset=dataset,
+            processor=processor,
+            batch_size=self.args.per_device_train_batch_size,
+            num_workers=self.args.dataloader_num_workers,
+            prefetch_factor=getattr(self.args, "dataloader_prefetch_factor", 2) or 2,
+            prefetch_batches=max(1, int(self.args.gradient_accumulation_steps)),
+        )
+        self._nvc_gop_train_dataloader = loader
+        return loader
+
+
+
+class ReasoningVLA_Trainer(_NvcGopTrainerMixin):
     """Trainer for Reasoning VLA models with support for custom learning rate multipliers."""
 
     def create_optimizer(self) -> torch.optim.Optimizer:

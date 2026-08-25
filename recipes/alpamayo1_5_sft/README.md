@@ -51,6 +51,31 @@ uv sync --active
 [NVlabs/alpamayo](https://github.com/NVlabs/alpamayo.git) as part of `uv sync` — no separate
 clone needed.
 
+### Optional: ACCV-Lab GOP/NVDEC input pipeline
+
+The `sft_stage1_nav_nvc_gop` configuration uses ACCV-Lab to demux GOPs in
+DataLoader workers and decode them with NVDEC in the training process. It is
+optional: the normal image-based configurations do not require it. On a GPU
+node with CUDA Toolkit and FFmpeg development packages available, install the
+decoder into the active `a1_5_sft` environment as follows:
+
+```bash
+git clone --recurse-submodules https://github.com/NVIDIA/ACCV-Lab.git \
+  ../ACCV-Lab
+cd ../ACCV-Lab
+uv pip install scikit-build ninja setuptools-scm accvlab-build-config
+sed -i 's#"accvlab-build-config @ file:../../build_config",#"accvlab-build-config",#' \
+  packages/on_demand_video_decoder/pyproject.toml
+FFMPEG_DIR=/path/to/ffmpeg-prefix uv pip install --no-build-isolation \
+  packages/on_demand_video_decoder
+python -c 'import accvlab.on_demand_video_decoder as nvc; print(nvc.__version__)'
+```
+
+`FFMPEG_DIR` must contain `include/libavcodec/avcodec.h` and `lib/`. On a
+multiarch Linux installation, create a small local prefix that exposes the
+package-manager include and
+library directories rather than writing to `/usr`.
+
 
 ## Prepare dataset
 
