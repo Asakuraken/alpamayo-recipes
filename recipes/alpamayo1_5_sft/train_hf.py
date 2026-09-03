@@ -87,9 +87,18 @@ def train(cfg: DictConfig) -> None:
             include_hydra_config=True,
         )
 
-    trainer.train()
-    if torch.distributed.is_initialized():
-        torch.distributed.destroy_process_group()
+    try:
+        trainer.train()
+    finally:
+        # Transformers does not own our NVC wrapper, so it never calls its
+        # explicit cleanup hook. Close it before distributed teardown to stop
+        # DataLoader workers and unlink all SharedGopStore blocks on both a
+        # successful run and an exception.
+        nvc_loader = getattr(trainer, "_nvc_gop_train_dataloader", None)
+        if nvc_loader is not None:
+            nvc_loader.close()
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":
